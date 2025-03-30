@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:gcode_view/gcode_view.dart';
@@ -14,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'G-code Viewer - G0 Tester',
+      title: 'G-code Viewer',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
@@ -42,38 +41,16 @@ class _MyHomePageState extends State<MyHomePage> {
   double pathThickness = 1.0; // Thicker for better visibility
   final controller = GcodeViewerController();
 
+  // Performance configuration
+  final viewerConfig = GcodeViewerConfig.highDetail();
+
   @override
   void initState() {
     super.initState();
-    // Start with default G-code
+    // Start with empty state until a file is loaded
     setState(() {
-      gcode = """
-; Set origin position to ensure first movement is visible
-G92 X0 Y0 Z0
-; First explicit G0 movement
-G0 X0 Y0 Z0
-; Test movements to visualize G0 trajectories
-G0 X100 Y0 Z0
-G0 X100 Y100 Z0
-G0 X0 Y100 Z0
-G0 X0 Y0 Z0
-; Move to working position
-G0 X114.655 Y41.819 Z15
-G0 Z5
-G1 Z-15 F500
-G1 X120 Y40 F800
-G1 X130 Y50
-G1 X130 Y70
-G1 X120 Y80
-G1 X80 Y80
-G1 X70 Y70
-G1 X70 Y50
-G1 X80 Y40
-G1 X114.655 Y41.819
-G0 Z15
-G0 X0 Y0 Z15
-""";
-      currentFilePath = "Sample G-code";
+      gcode = "";
+      currentFilePath = "No file loaded";
       isLoading = false;
     });
   }
@@ -134,7 +111,7 @@ G0 X0 Y0 Z15
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('G0 Test - ${currentFilePath.split('/').last}'),
+        title: Text('GCode Viewer - $currentFilePath'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
@@ -146,27 +123,61 @@ G0 X0 Y0 Z15
           ),
           IconButton(
             icon: const Icon(Icons.file_open),
-            onPressed: () {
-              // Allow loading different test files
-              _showFileSelectionDialog();
-            },
+            onPressed: _pickAndLoadGcodeFile,
             tooltip: 'Open file',
           ),
         ],
       ),
       body: Column(
         children: [
+          // Info bar with gesture instructions
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+            color: Colors.grey.shade100,
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.pan_tool_alt, size: 16),
+                SizedBox(width: 4),
+                Text('Drag to pan', style: TextStyle(fontSize: 12)),
+                SizedBox(width: 16),
+                Icon(Icons.pinch, size: 16),
+                SizedBox(width: 4),
+                Text('Pinch to zoom', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
           Expanded(
             child: isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : GcodeViewer(
-                    gcode: gcode,
-                    cutColor: cutColor,
-                    travelColor: travelColor,
-                    pathThickness: pathThickness,
-                    showGrid: true,
-                    controller: controller,
-                  ),
+                : gcode.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.upload_file,
+                                size: 64, color: Colors.grey.shade400),
+                            const SizedBox(height: 16),
+                            const Text(
+                                'No file loaded. Tap the file icon to load a G-code file.'),
+                            const SizedBox(height: 24),
+                            ElevatedButton.icon(
+                              icon: const Icon(Icons.file_open),
+                              label: const Text('Load G-code File'),
+                              onPressed: _pickAndLoadGcodeFile,
+                            ),
+                          ],
+                        ),
+                      )
+                    : GcodeViewer(
+                        gcode: gcode,
+                        cutColor: cutColor,
+                        travelColor: travelColor,
+                        pathThickness: pathThickness,
+                        showGrid: true,
+                        controller: controller,
+                        config: viewerConfig,
+                      ),
           ),
           Container(
             padding: const EdgeInsets.all(16),
@@ -205,97 +216,6 @@ G0 X0 Y0 Z15
                 ),
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showFileSelectionDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Choose a G-code file'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.upload_file),
-              title: const Text('Select G-code file'),
-              onTap: () {
-                Navigator.pop(context);
-                _pickAndLoadGcodeFile();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.file_present),
-              title: const Text('Sample G-code (gripper)'),
-              onTap: () {
-                Navigator.pop(context);
-                // Use default G-code that matches your gripper
-                setState(() {
-                  gcode = """
-; Set origin position to ensure first movement is visible
-G92 X0 Y0 Z0
-; First explicit G0 movement
-G0 X0 Y0 Z0
-; Test movements to visualize G0 trajectories
-G0 X100 Y0 Z0
-G0 X100 Y100 Z0
-G0 X0 Y100 Z0
-G0 X0 Y0 Z0
-; Move to working position
-G0 X114.655 Y41.819 Z15
-G0 Z5
-G1 Z-15 F500
-G1 X120 Y40 F800
-G1 X130 Y50
-G1 X130 Y70
-G1 X120 Y80
-G1 X80 Y80
-G1 X70 Y70
-G1 X70 Y50
-G1 X80 Y40
-G1 X114.655 Y41.819
-G0 Z15
-G0 X0 Y0 Z15
-""";
-                  currentFilePath = "Sample G-code";
-                });
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('G0 visibility test'),
-              onTap: () {
-                Navigator.pop(context);
-                setState(() {
-                  gcode = """
-; Specific test to see all G0
-G92 X0 Y0 Z0
-G0 X0 Y0 Z0
-G0 X50 Y0 Z0
-G0 X50 Y50 Z0
-G0 X0 Y50 Z0
-G0 X0 Y0 Z0
-; Test with Z
-G0 X0 Y0 Z10
-G0 X50 Y0 Z10
-G0 X50 Y50 Z10
-G0 X0 Y50 Z10
-G0 X0 Y0 Z10
-G0 X0 Y0 Z0
-""";
-                  currentFilePath = "G0 Test";
-                });
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
           ),
         ],
       ),

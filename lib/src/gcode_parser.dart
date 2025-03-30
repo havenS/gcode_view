@@ -68,19 +68,46 @@ class ParsedGcode {
   }
 }
 
+/// Parser configuration for controlling performance and detail level
+class GcodeParserConfig {
+  /// Detail level for arc rendering (1.0 = normal, higher = more detailed)
+  final double arcDetailLevel;
+
+  /// Minimum distance in units between points before simplification
+  /// Smaller values = more detailed paths, larger values = more performance
+  final double segmentThreshold;
+
+  /// Maximum segments for arcs (prevent excessive detailing)
+  final int maxArcSegments;
+
+  /// Create a parser configuration
+  const GcodeParserConfig({
+    this.arcDetailLevel = 1.0,
+    this.segmentThreshold = 0.05, // Default to 0.05mm threshold
+    this.maxArcSegments = 300, // Cap for performance
+  });
+}
+
 /// Parses a G-code string into a structured format.
 ///
 /// [gcode] The G-code string to parse.
-/// [arcDetailLevel] Detail level for arc rendering (1.0 = normal, higher = more detailed).
+/// [config] Configuration settings for the parser.
 ///
 /// Returns a [ParsedGcode] object containing the parsed data.
-ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
-  final List<vector.Vector3> allPoints = [];
-  final List<bool> allIsTravelFlags = [];
-  final List<double> allZValues = [];
+ParsedGcode parseGcode(String gcode, {GcodeParserConfig? config}) {
+  final parserConfig = config ?? const GcodeParserConfig();
 
-  // Also generate separate path segments for better rendering
+  // Pre-allocate estimated capacity for collections to prevent frequent resizing
+  final lines = gcode.split('\n');
+  final estimatedPoints = math.min(lines.length * 2, 10000);
+
+  final List<vector.Vector3> allPoints = List.empty(growable: true)..length = 0;
+  final List<bool> allIsTravelFlags = List.empty(growable: true)..length = 0;
+  final List<double> allZValues = List.empty(growable: true)..length = 0;
   final List<GcodePath> pathSegments = [];
+
+  // Force extremely detailed arc segments for critical features like tabs
+  const double tabDetailSegmentThreshold = 0.005; // Much more detailed for tabs
 
   vector.Vector3 currentPosition = vector.Vector3.zero();
   bool absoluteMode = true; // G90 is usually default
@@ -96,28 +123,28 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
   final Set<String> encounteredCommands = {};
   final Map<double, int> zLevelCounts = {};
 
-  final lines = gcode.split('\n');
-
-  if (kDebugMode) {
-    print('Processing ${lines.length} lines of G-code');
-  }
-
   // Current path segment
   List<vector.Vector3> currentPathPoints = [];
   bool currentPathIsTravel = false;
 
-  // Force le premier point à (0,0,0) si aucun G92 n'est spécifié
+  // Force the first point to (0,0,0) if no G92 is specified
   bool hasSetInitialPosition = false;
 
-  for (var line in lines) {
-    line = line.trim();
-    // Skip comments
+  // Performance optimization: Cache the trimmed lines to avoid multiple string operations
+  final List<String> trimmedLines = List.generate(lines.length, (index) {
+    String line = lines[index].trim();
+    // Process comments
     if (line.contains(';')) {
       line = line.substring(0, line.indexOf(';')).trim();
     }
     if (line.startsWith('(') && line.endsWith(')')) {
-      line = '';
+      return '';
     }
+    return line;
+  });
+
+  for (int lineIndex = 0; lineIndex < trimmedLines.length; lineIndex++) {
+    final line = trimmedLines[lineIndex];
     if (line.isEmpty) continue;
 
     final parts = line.toUpperCase().split(' ');
@@ -127,7 +154,7 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
     int? gCode;
     bool hasCoordinates = false;
 
-    // Vérifier si cette ligne contient une commande G92 (définition de position)
+    // Check if line contains a G92 command (position definition)
     if (line.toUpperCase().contains('G92')) {
       hasSetInitialPosition = true;
     }
@@ -217,36 +244,36 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
       final positionChanged =
           currentPosition.distanceToSquared(nextPosition) > epsilon * epsilon;
 
-      // Pour le premier déplacement, on le traite toujours comme un changement de position
-      // même si les coordonnées sont identiques (0,0,0 -> 0,0,0)
+      // For the first movement, always treat it as a position change
+      // even if coordinates are identical (0,0,0 -> 0,0,0)
       if (!hasSetInitialPosition && allPoints.isEmpty && gCode == 0) {
         if (kDebugMode) {
           print(
-            'Premier déplacement G0 dessiné en surbrillance: $currentPosition -> $nextPosition',
+            'First G0 movement drawn highlighted: $currentPosition -> $nextPosition',
           );
         }
 
-        // Assurer que le premier point est toujours ajouté
+        // Ensure first point is always added
         allPoints.add(currentPosition.clone());
         allZValues.add(currentPosition.z);
-        allIsTravelFlags.add(true); // Premier point est toujours un déplacement
+        allIsTravelFlags.add(true); // First point is always a movement
 
-        // Ajouter au segment de chemin actuel
+        // Add to current path segment
         if (currentPathPoints.isEmpty) {
           currentPathPoints.add(currentPosition.clone());
           currentPathIsTravel = true;
         }
 
-        // Considérer le point suivant
+        // Consider next point
         currentPathPoints.add(nextPosition.clone());
         allPoints.add(nextPosition.clone());
         allZValues.add(nextPosition.z);
         allIsTravelFlags.add(true);
 
-        // Mettre à jour la position courante
+        // Update current position
         currentPosition = nextPosition.clone();
 
-        // Continuer avec la ligne suivante
+        // Continue with next line
         continue;
       }
 
@@ -272,7 +299,8 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
 
         // Add all points for this move
         if (gCode == 2 || gCode == 3) {
-          // Arc move - calculate intermediate points
+          // Arc move - calculate intermediate points with optimization
+          // Always use high detail for arc segments to ensure tabs are preserved
           final arcPoints = calculateArcPoints(
             currentPosition,
             nextPosition,
@@ -282,7 +310,11 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
             rValue,
             gCode == 2,
             currentPlane,
-            detailLevel: arcDetailLevel,
+            detailLevel:
+                parserConfig.arcDetailLevel * 2.0, // Double the detail level
+            maxSegments: parserConfig.maxArcSegments * 2, // Double the segments
+            segmentThreshold:
+                tabDetailSegmentThreshold, // Force very detailed segments
           );
 
           // Add all points after the first (which is already in the path)
@@ -354,6 +386,8 @@ ParsedGcode parseGcode(String gcode, {double arcDetailLevel = 1.5}) {
 /// [clockwise] Whether the arc should be drawn clockwise.
 /// [plane] Current plane for the arc (G17=XY, G18=ZX, G19=YZ).
 /// [detailLevel] Detail level for rendering (higher = more points).
+/// [maxSegments] Maximum number of segments to generate.
+/// [segmentThreshold] Minimum distance between points to prevent overly detailed paths.
 ///
 /// Returns a list of Vector3 points representing the arc.
 List<vector.Vector3> calculateArcPoints(
@@ -365,7 +399,9 @@ List<vector.Vector3> calculateArcPoints(
   double? r,
   bool clockwise,
   String plane, {
-  double detailLevel = 2.5,
+  double detailLevel = 1.0,
+  int maxSegments = 300,
+  double segmentThreshold = 0.05,
 }) {
   final List<vector.Vector3> arcPoints = [];
 
@@ -502,39 +538,51 @@ List<vector.Vector3> calculateArcPoints(
     sweepAngle = clockwise ? -2 * math.pi : 2 * math.pi;
   }
 
-  // Calculate segments based on radius and arc length
-  // Use more segments for small radii to ensure smooth rendering of tabs
-  const double baseSegmentsPerRadian = 20.0; // Increased for better quality
-  int segments;
+  // Calculate segments based on arc length and radius
+  // Smaller radius arcs need more segments per unit length to maintain quality
+  double arcLength = radius * sweepAngle.abs();
 
-  // Handle specific cases more carefully
-  if (radius < 0.5) {
-    // Extra segments for tiny arcs like tabs/chamfers
-    segments = (150 * detailLevel).round();
+  // Adjust segment count based on radius - smaller radius = more detail needed
+  double segmentFactor;
+  if (radius < 1.0) {
+    // For very small radii like tabs, use extremely high detail
+    segmentFactor = 0.005; // 0.005mm per segment for small features
   } else if (radius < 3.0) {
-    // More segments for small to medium arcs
-    segments =
-        (radius * sweepAngle.abs() * baseSegmentsPerRadian * detailLevel * 3)
-            .ceil();
+    // For small radii, use very high detail
+    segmentFactor = 0.01; // 0.01mm per segment
+  } else if (radius < 10.0) {
+    // For medium radii, use high detail
+    segmentFactor = 0.03; // 0.03mm per segment
   } else {
-    // Standard calculation for larger arcs
-    segments =
-        (radius * sweepAngle.abs() * baseSegmentsPerRadian * detailLevel)
-            .ceil();
+    // For normal/large arcs, use standard detail
+    segmentFactor = segmentThreshold;
   }
 
-  // Ensure reasonable bounds
-  segments = math.max(
-    segments,
-    (80 * detailLevel).round(),
-  ); // Increased minimum
-  segments = math.min(
-    segments,
-    (1200 * detailLevel).round(),
-  ); // Increased maximum
+  // Apply detail level adjustment
+  segmentFactor /= detailLevel;
 
-  // Calculate points along the arc
-  for (int i = 0; i <= segments; i++) {
+  // Calculate segment count
+  int segments = (arcLength / segmentFactor).ceil();
+
+  // Ensure reasonable bounds
+  segments = math.max(segments, 12); // Minimum of 12 segments for any arc
+  segments = math.min(segments, maxSegments); // Cap maximum segments
+
+  // Special case for small features that might be tabs
+  // If the arc has a small radius and spans close to 90 degrees, it might be a tab corner
+  if (radius < 3.0 &&
+      sweepAngle.abs() > math.pi / 4 &&
+      sweepAngle.abs() < math.pi / 2 + 0.2) {
+    // Ensure we have enough segments for a smooth corner (at least 12 for quarter circles)
+    segments = math.max(segments, 12);
+  }
+
+  // Calculate points along the arc using adaptive segment count
+  double lastAngle = startAngle;
+  vector.Vector3? lastPoint = arcPoints.first;
+
+  // Generate more equidistant points
+  for (int i = 1; i <= segments; i++) {
     final t = i / segments;
     final angle = startAngle + t * sweepAngle;
 
@@ -557,7 +605,23 @@ List<vector.Vector3> calculateArcPoints(
       point = vector.Vector3(start.x, y, z); // X remains constant
     }
 
-    arcPoints.add(point);
+    // Small radius features (likely tabs and corners) - always add the point
+    // For larger features, apply distance-based filtering
+    if (radius < 3.0 ||
+        i == segments || // Always include end point
+        lastPoint == null ||
+        (point - lastPoint).length >= segmentFactor * 2) {
+      // Use double the threshold for filtering
+
+      arcPoints.add(point);
+      lastPoint = point;
+      lastAngle = angle;
+    }
+  }
+
+  // Ensure we always include the exact end point for precision
+  if ((arcPoints.last - end).length > 0.001) {
+    arcPoints.add(end.clone());
   }
 
   return arcPoints;

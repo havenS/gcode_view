@@ -1,24 +1,83 @@
+import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'gcode_parser.dart';
+import 'dart:math' as math;
 
 /// Controller to interact with a [GcodeViewer] instance.
 class GcodeViewerController {
   VoidCallback? _resetViewCallback;
+  VoidCallback? _refreshViewCallback;
 
   /// Resets the camera view (position, rotation, zoom) to its initial state.
   void resetView() {
     _resetViewCallback?.call();
   }
 
+  /// Forces a refresh of the view.
+  void refreshView() {
+    _refreshViewCallback?.call();
+  }
+
   // Internal methods for the widget to register its state's methods
-  void _attach(VoidCallback resetCallback) {
+  void _attach(VoidCallback resetCallback, VoidCallback refreshCallback) {
     _resetViewCallback = resetCallback;
+    _refreshViewCallback = refreshCallback;
   }
 
   void _detach() {
     _resetViewCallback = null;
+    _refreshViewCallback = null;
+  }
+}
+
+/// Viewer configuration for controlling performance and detail level
+class GcodeViewerConfig {
+  /// Controls the sensitivity of zooming gestures
+  final double zoomSensitivity;
+
+  /// Whether to use path caching for better performance
+  final bool usePathCaching;
+
+  /// Whether to use level-of-detail rendering based on zoom
+  final bool useLevelOfDetail;
+
+  /// Maximum points to render at once for performance (0 = no limit)
+  final int maxPointsToRender;
+
+  /// Detail level for arc rendering
+  final double arcDetailLevel;
+
+  /// Whether to enable enhanced small feature detection (tabs, slots)
+  final bool preserveSmallFeatures;
+
+  /// Threshold in mm below which features are considered "small" and preserved
+  final double smallFeatureThreshold;
+
+  /// Create a viewer configuration
+  const GcodeViewerConfig({
+    this.zoomSensitivity = 0.5,
+    this.usePathCaching = true,
+    this.useLevelOfDetail = true,
+    this.maxPointsToRender = 10000,
+    this.arcDetailLevel = 1.0,
+    this.preserveSmallFeatures = true,
+    this.smallFeatureThreshold = 5.0,
+  });
+
+  /// Returns a high detail configuration optimized for small feature rendering
+  factory GcodeViewerConfig.highDetail() {
+    return const GcodeViewerConfig(
+      zoomSensitivity: 0.5,
+      usePathCaching: true,
+      useLevelOfDetail: false, // Disable LOD for high detail rendering
+      maxPointsToRender: 100000, // Allow many more points to render
+      arcDetailLevel: 4.0, // Very high arc detail
+      preserveSmallFeatures: true, // Always preserve small features
+      smallFeatureThreshold: 20.0, // More aggressive small feature detection
+    );
   }
 }
 
@@ -45,17 +104,8 @@ class GcodeViewer extends StatefulWidget {
   /// Whether the units are millimeters (true) or inches (false).
   final bool isMillimeters;
 
-  /// Detail level for arc rendering (1.0 = normal, higher = more detailed)
-  final double arcDetailLevel;
-
-  /// Controls the sensitivity of zooming gestures.
-  ///
-  /// Values between 0.1 and 2.0 are recommended:
-  /// - Lower values (< 1.0) make zooming less sensitive and more controlled
-  /// - Higher values (> 1.0) make zooming more responsive but potentially harder to control
-  ///
-  /// Default is 0.5 for smoother zoom control.
-  final double zoomSensitivity;
+  /// Detailed configuration for the viewer
+  final GcodeViewerConfig? config;
 
   /// Optional controller to programmatically interact with the viewer.
   final GcodeViewerController? controller;
@@ -70,8 +120,7 @@ class GcodeViewer extends StatefulWidget {
     this.gridColor = Colors.black12,
     this.showGrid = true,
     this.isMillimeters = true,
-    this.arcDetailLevel = 2.5,
-    this.zoomSensitivity = 0.5,
+    this.config,
   });
 
   @override
@@ -106,34 +155,60 @@ class _GcodeViewerState extends State<GcodeViewer> {
   Offset? _lastFocalPoint;
 
   // Store parsed G-code results
+  late ParsedGcode _parsedGcode;
   List<vector.Vector3> _pathPoints = [];
   List<bool> _isTravelFlags = [];
-  List<double> _zValues = []; // Add Z-values storage
+  List<double> _zValues = [];
+
+  // Path caching for improved performance
+  final Map<String, ui.Path> _pathCache = {};
+  bool _needsPathRebuild = true;
+
+  // Repaint throttling
+  Timer? _repaintTimer;
+  bool _pendingRepaint = false;
+
+  // Configuration
+  late GcodeViewerConfig _config;
 
   @override
   void initState() {
     super.initState();
     _transform = _initialTransform.clone();
-    widget.controller?._attach(_resetView);
+    _config = widget.config ?? const GcodeViewerConfig();
+    widget.controller?._attach(_resetView, _refreshView);
     _parseAndUpdatePath(); // Parse initial G-code
   }
 
   @override
   void didUpdateWidget(covariant GcodeViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // Update configuration if needed
+    if (widget.config != oldWidget.config) {
+      _config = widget.config ?? const GcodeViewerConfig();
+    }
+
     bool controllerChanged = false;
     if (widget.controller != oldWidget.controller) {
       oldWidget.controller?._detach();
-      widget.controller?._attach(_resetView);
+      widget.controller?._attach(_resetView, _refreshView);
       controllerChanged = true;
     }
-    // Re-parse if G-code string changes
+
+    // Re-parse if G-code string changes or if other key properties change
     if (widget.gcode != oldWidget.gcode ||
-        controllerChanged /* Also reset on controller change? Might not be needed */ ) {
+        widget.isMillimeters != oldWidget.isMillimeters ||
+        controllerChanged) {
       _parseAndUpdatePath();
     }
-    // TODO: Handle changes in other widget properties (colors, thickness etc.)
-    // if they affect parsing or require repaint
+
+    // Check if we need to invalidate path cache due to style changes
+    if (widget.pathThickness != oldWidget.pathThickness ||
+        widget.cutColor != oldWidget.cutColor ||
+        widget.travelColor != oldWidget.travelColor) {
+      _invalidatePathCache();
+    }
   }
 
   void _parseAndUpdatePath() {
@@ -142,46 +217,95 @@ class _GcodeViewerState extends State<GcodeViewer> {
         _pathPoints = [];
         _isTravelFlags = [];
         _zValues = [];
+        _parsedGcode = ParsedGcode([], [], []);
+        _invalidatePathCache();
       });
       return;
     }
+
     try {
-      final parsedData = parseGcode(
-        widget.gcode,
-        arcDetailLevel: widget.arcDetailLevel,
+      // Configure the parser with our performance settings
+      final parserConfig = GcodeParserConfig(
+        arcDetailLevel: _config.arcDetailLevel,
+        maxArcSegments: 200, // Cap arc segments for performance
+        segmentThreshold: 0.05, // 0.05mm minimum segment length
       );
+
+      final parsedData = parseGcode(widget.gcode, config: parserConfig);
+
       setState(() {
+        _parsedGcode = parsedData;
         _pathPoints = parsedData.points;
         _isTravelFlags = parsedData.isTravel;
-        _zValues = parsedData.zValues; // Store Z-values
+        _zValues = parsedData.zValues;
+        _invalidatePathCache();
       });
     } catch (e) {
       if (kDebugMode) {
         print("Error parsing G-code: $e");
       }
-      // Optionally show an error message to the user
+      // Clear path on error
       setState(() {
-        _pathPoints = []; // Clear path on error
+        _pathPoints = [];
         _isTravelFlags = [];
         _zValues = [];
+        _parsedGcode = ParsedGcode([], [], []);
+        _invalidatePathCache();
       });
     }
   }
 
+  // Invalidates path cache to force rebuild
+  void _invalidatePathCache() {
+    _pathCache.clear();
+    _needsPathRebuild = true;
+  }
+
+  // Throttled repaint request
+  void _requestRepaint() {
+    if (_repaintTimer != null && _repaintTimer!.isActive) {
+      // A repaint is already scheduled
+      _pendingRepaint = true;
+      return;
+    }
+
+    // Schedule a new repaint
+    setState(() {
+      // Just trigger a rebuild
+    });
+
+    // Set a timer to handle additional repaint requests
+    _repaintTimer = Timer(const Duration(milliseconds: 16), () {
+      if (_pendingRepaint) {
+        _pendingRepaint = false;
+        // If there was a pending repaint request, do it now
+        setState(() {});
+      }
+    });
+  }
+
   @override
   void dispose() {
-    // Detach controller
+    _repaintTimer?.cancel();
+    _pathCache.clear();
     widget.controller?._detach();
     super.dispose();
   }
 
-  /// Resets the view to the initial state (internal method)
+  /// Resets the view to the initial state
   void _resetView() {
     setState(() {
       _transform = _initialTransform.clone();
       _zoom = 1.0;
       _offset = Offset.zero;
-      _lastFocalPoint = null; // Reset gesture state too
+      _lastFocalPoint = null;
+    });
+  }
+
+  /// Forces a refresh of the view
+  void _refreshView() {
+    setState(() {
+      _invalidatePathCache();
     });
   }
 
@@ -201,34 +325,30 @@ class _GcodeViewerState extends State<GcodeViewer> {
             if (_lastFocalPoint == null) return;
 
             final focalPoint = details.localFocalPoint;
-            final delta =
-                focalPoint - _lastFocalPoint!; // Use this delta for rotation
+            final delta = focalPoint - _lastFocalPoint!;
             final scaleDelta = details.scale;
 
-            setState(() {
-              if (scaleDelta == 1.0) {
-                // --- Handle Pan (One-finger drag) ---
-                // Update the offset based on the drag delta
+            if (scaleDelta == 1.0) {
+              // Pan operation (one-finger drag) - Force path cache invalidation for proper panning
+              setState(() {
                 _offset += delta;
-              } else {
-                // --- Handle Zoom (Two-finger pinch) ---
+                _invalidatePathCache(); // Important: Invalidate cache to ensure paths move with grid
+              });
+            } else {
+              // Zoom operation (pinch)
 
-                // Panning adjustment during zoom - Keep this for smoother zoom?
+              // Apply panning during zoom
+              setState(() {
                 _offset += delta;
 
-                // --- Zooming Calculation ---
-                // Dampen the scaleDelta
+                // Calculate zoom with sensitivity adjustment
                 final effectiveScaleDelta =
-                    1.0 + (scaleDelta - 1.0) * widget.zoomSensitivity;
-
-                final newZoom =
-                    _zoom * effectiveScaleDelta; // Use dampened scale
-
-                final zoomFactor =
-                    newZoom / _zoom; // Use newZoom based on dampened scale
+                    1.0 + (scaleDelta - 1.0) * _config.zoomSensitivity;
+                final newZoom = _zoom * effectiveScaleDelta;
+                final zoomFactor = newZoom / _zoom;
                 _zoom = newZoom;
 
-                // Translate origin to focal point relative to current view center + offset
+                // Apply zoom centered around focal point
                 final centerOffset =
                     Offset(size.width / 2, size.height / 2) + _offset;
                 final focalPointVec = vector.Vector3(
@@ -244,34 +364,49 @@ class _GcodeViewerState extends State<GcodeViewer> {
                     vector.Matrix4.identity()..scale(zoomFactor);
                 final translateBack = vector.Matrix4.translation(focalPointVec);
 
-                // Apply zoom centered around the focal point
+                // Apply transformations
                 _transform =
                     translateBack * scaleMatrix * translateToFocal * _transform;
-              }
 
-              _lastFocalPoint = focalPoint;
-            });
+                // Always invalidate path cache on zoom and pan together
+                _invalidatePathCache();
+              });
+            }
+
+            _lastFocalPoint = focalPoint;
           },
           onScaleEnd: (details) {
             _lastFocalPoint = null;
           },
-          child: ClipRect(
-            // Prevent drawing outside bounds
-            child: CustomPaint(
-              size: size,
-              painter: _GcodePainter(
-                transform: _transform,
-                zoom: _zoom,
-                offset: _offset + initialOffset, // Apply centering offset
-                pathPoints: _pathPoints, // Pass parsed points
-                isTravelFlags: _isTravelFlags, // Pass travel flags
-                zValues: _zValues, // Pass Z-values
-                pathThickness: widget.pathThickness,
-                cutColor: widget.cutColor,
-                travelColor: widget.travelColor,
-                gridColor: widget.gridColor,
-                showGrid: widget.showGrid,
-                isMillimeters: widget.isMillimeters,
+          child: RepaintBoundary(
+            child: ClipRect(
+              child: CustomPaint(
+                size: size,
+                painter: _GcodePainter(
+                  transform: _transform,
+                  zoom: _zoom,
+                  offset: _offset + initialOffset,
+                  parsedGcode: _parsedGcode,
+                  pathPoints: _pathPoints,
+                  isTravelFlags: _isTravelFlags,
+                  zValues: _zValues,
+                  pathThickness: widget.pathThickness,
+                  cutColor: widget.cutColor,
+                  travelColor: widget.travelColor,
+                  gridColor: widget.gridColor,
+                  showGrid: widget.showGrid,
+                  isMillimeters: widget.isMillimeters,
+                  useLevelOfDetail: _config.useLevelOfDetail,
+                  usePathCaching: _config.usePathCaching,
+                  maxPointsToRender: _config.maxPointsToRender,
+                  pathCache: _pathCache,
+                  needsPathRebuild: _needsPathRebuild,
+                  onPathsBuilt: () {
+                    _needsPathRebuild = false;
+                  },
+                  preserveSmallFeatures: _config.preserveSmallFeatures,
+                  smallFeatureThreshold: _config.smallFeatureThreshold,
+                ),
               ),
             ),
           ),
@@ -285,6 +420,7 @@ class _GcodePainter extends CustomPainter {
   final vector.Matrix4 transform;
   final double zoom;
   final Offset offset;
+  final ParsedGcode parsedGcode;
   final List<vector.Vector3> pathPoints;
   final List<bool> isTravelFlags;
   final List<double> zValues;
@@ -294,11 +430,20 @@ class _GcodePainter extends CustomPainter {
   final Color gridColor;
   final bool showGrid;
   final bool isMillimeters;
+  final bool useLevelOfDetail;
+  final bool usePathCaching;
+  final int maxPointsToRender;
+  final Map<String, ui.Path> pathCache;
+  final bool needsPathRebuild;
+  final VoidCallback onPathsBuilt;
+  final bool preserveSmallFeatures;
+  final double smallFeatureThreshold;
 
   _GcodePainter({
     required this.transform,
     required this.zoom,
     required this.offset,
+    required this.parsedGcode,
     required this.pathPoints,
     required this.isTravelFlags,
     required this.zValues,
@@ -308,6 +453,14 @@ class _GcodePainter extends CustomPainter {
     required this.gridColor,
     required this.showGrid,
     required this.isMillimeters,
+    required this.useLevelOfDetail,
+    required this.usePathCaching,
+    required this.maxPointsToRender,
+    required this.pathCache,
+    required this.needsPathRebuild,
+    required this.onPathsBuilt,
+    required this.preserveSmallFeatures,
+    required this.smallFeatureThreshold,
   });
 
   @override
@@ -332,63 +485,156 @@ class _GcodePainter extends CustomPainter {
           ..style = PaintingStyle.stroke;
 
     // --- Projection Logic ---
-    // Simple orthographic projection for now
-    // Perspective would require a different projection matrix calculation
+    // Simple orthographic projection with consistent offset handling
     vector.Vector3 project(vector.Vector3 p) {
-      // Convert Vector3 to Vector4 (w=1 for points)
+      // Apply the 3D transform
       final p4 = vector.Vector4(p.x, p.y, p.z, 1.0);
-      // Apply the 3D transformation (rotation, etc.)
       final transformed = transform.transformed(p4);
-      // Apply perspective division if needed (for perspective projection)
-      // For orthographic, w remains 1 (or should be handled)
-      // Let's assume orthographic for now, just use x, y, z
       final transformed3 = vector.Vector3(
         transformed.x,
         transformed.y,
         transformed.z,
       );
 
-      // Apply zoom (scaling)
+      // Apply zoom
       final scaled = transformed3 * zoom;
-      // Apply panning offset
+
+      // Apply offset consistently
       return vector.Vector3(
         scaled.x + offset.dx,
         scaled.y + offset.dy,
         scaled.z,
-      ); // Keep z for potential future use (depth sorting, etc.)
+      );
     }
 
     // --- Draw Grid (if enabled) ---
     if (showGrid) {
-      final double gridSpacing =
-          isMillimeters ? 100.0 : 4.0 * 25.4; // 10cm or 4 inches in mm
-      final int gridLines = 20; // Number of lines each side of origin
-      final double maxCoord = gridLines * gridSpacing;
-
-      for (int i = -gridLines; i <= gridLines; i++) {
-        final double pos = i * gridSpacing;
-
-        // Lines parallel to Y axis (on XY plane, z=0)
-        final p1Xy = project(vector.Vector3(pos, -maxCoord, 0));
-        final p2Xy = project(vector.Vector3(pos, maxCoord, 0));
-        canvas.drawLine(
-          Offset(p1Xy.x, p1Xy.y),
-          Offset(p2Xy.x, p2Xy.y),
-          gridPaint,
-        );
-
-        // Lines parallel to X axis (on XY plane, z=0)
-        final p3Xy = project(vector.Vector3(-maxCoord, pos, 0));
-        final p4Xy = project(vector.Vector3(maxCoord, pos, 0));
-        canvas.drawLine(
-          Offset(p3Xy.x, p3Xy.y),
-          Offset(p4Xy.x, p4Xy.y),
-          gridPaint,
-        );
-      }
+      // Efficiently render grid with level-of-detail based on zoom
+      _renderGrid(canvas, size, gridPaint, project);
     }
 
     // --- Draw Axes ---
+    _renderAxes(canvas, size, axisPaint, project);
+
+    // --- Draw Path Segments ---
+    if (pathPoints.isEmpty) return;
+
+    // Handle the case when we have too many points to render efficiently
+    final shouldReduceDetail =
+        useLevelOfDetail &&
+        maxPointsToRender > 0 &&
+        pathPoints.length > maxPointsToRender;
+
+    // Generate cache key that includes offset to prevent cache reuse when panning
+    final offsetKey =
+        "${offset.dx.toStringAsFixed(0)},${offset.dy.toStringAsFixed(0)}";
+
+    // Determine segments for drawing
+    final List<GcodePath> pathSegments = parsedGcode.pathSegments;
+
+    // Get/build paths from cache or create new ones if needed
+    final cuttingPaths = _getCachedPaths(
+      false, // Not travel paths (cutting paths)
+      shouldReduceDetail,
+      project,
+      pathSegments,
+      offsetKey, // Include offset in cache key
+    );
+
+    final travelPaths = _getCachedPaths(
+      true, // Travel paths
+      shouldReduceDetail,
+      project,
+      pathSegments,
+      offsetKey, // Include offset in cache key
+    );
+
+    // Mark that paths are now built and cached
+    if (needsPathRebuild) {
+      onPathsBuilt();
+    }
+
+    // Draw cutting paths
+    paint.color = cutColor;
+    paint.strokeWidth = pathThickness;
+    paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5);
+
+    for (final path in cuttingPaths) {
+      canvas.drawPath(path, paint);
+    }
+
+    // Draw travel paths
+    paint.color = travelColor;
+    paint.strokeWidth = pathThickness * 1.2;
+    paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5);
+
+    for (final path in travelPaths) {
+      canvas.drawPath(path, paint);
+    }
+
+    // Special handling for first travel segment to highlight it
+    if (pathSegments.isNotEmpty && pathSegments.any((seg) => seg.isTravel)) {
+      _renderFirstTravelPath(canvas, paint, project, pathSegments);
+    }
+  }
+
+  // Efficiently render the grid with level-of-detail based on zoom
+  void _renderGrid(
+    Canvas canvas,
+    Size size,
+    Paint gridPaint,
+    Function project,
+  ) {
+    final double gridSpacing =
+        isMillimeters ? 100.0 : 4.0 * 25.4; // 10cm or 4 inches in mm
+
+    // Level of detail - adjust grid density based on zoom
+    final gridDensity =
+        zoom < 0.5
+            ? 5
+            : zoom < 1.0
+            ? 10
+            : zoom < 2.0
+            ? 20
+            : 30;
+
+    final int gridLines = gridDensity;
+    final double maxCoord = gridLines * gridSpacing;
+
+    // Optimization: batch grid lines into paths rather than individual drawLine calls
+    final Path horizontalGridPath = Path();
+    final Path verticalGridPath = Path();
+
+    for (int i = -gridLines; i <= gridLines; i++) {
+      final double pos = i * gridSpacing;
+
+      // Lines parallel to Y axis
+      final p1Xy = project(vector.Vector3(pos, -maxCoord, 0));
+      final p2Xy = project(vector.Vector3(pos, maxCoord, 0));
+
+      horizontalGridPath.moveTo(p1Xy.x, p1Xy.y);
+      horizontalGridPath.lineTo(p2Xy.x, p2Xy.y);
+
+      // Lines parallel to X axis
+      final p3Xy = project(vector.Vector3(-maxCoord, pos, 0));
+      final p4Xy = project(vector.Vector3(maxCoord, pos, 0));
+
+      verticalGridPath.moveTo(p3Xy.x, p3Xy.y);
+      verticalGridPath.lineTo(p4Xy.x, p4Xy.y);
+    }
+
+    // Draw all grid lines at once
+    canvas.drawPath(horizontalGridPath, gridPaint);
+    canvas.drawPath(verticalGridPath, gridPaint);
+  }
+
+  // Render coordinate axes
+  void _renderAxes(
+    Canvas canvas,
+    Size size,
+    Paint axisPaint,
+    Function project,
+  ) {
     final origin = project(vector.Vector3(0, 0, 0));
 
     // Function to prepare and paint text labels
@@ -405,17 +651,15 @@ class _GcodePainter extends CustomPainter {
       );
       textPainter.layout(minWidth: 0, maxWidth: size.width);
 
-      // Offset slightly from the axis end point
-      // Calculate direction vector from origin to endpoint
+      // Offset from axis endpoint
       final originOffset = Offset(origin.x, origin.y);
       final direction = position - originOffset;
-      // Normalize direction and multiply by desired offset distance
       final offsetDistance = 10.0;
       final normalizedDirection = direction / direction.distance;
       final textOffsetPosition =
           position + (normalizedDirection * offsetDistance);
 
-      // Adjust position to center the text
+      // Center the text
       final finalPosition = Offset(
         textOffsetPosition.dx - textPainter.width / 2,
         textOffsetPosition.dy - textPainter.height / 2,
@@ -424,10 +668,8 @@ class _GcodePainter extends CustomPainter {
       textPainter.paint(canvas, finalPosition);
     }
 
-    // X Axis (Red) - Reverted to positive X direction
-    final xAxisEnd = project(
-      vector.Vector3(50, 0, 0),
-    ); // Use a fixed world length in positive X
+    // X Axis (Red)
+    final xAxisEnd = project(vector.Vector3(50, 0, 0));
     canvas.drawLine(
       Offset(origin.x, origin.y),
       Offset(xAxisEnd.x, xAxisEnd.y),
@@ -436,9 +678,7 @@ class _GcodePainter extends CustomPainter {
     paintAxisLabel('X', Offset(xAxisEnd.x, xAxisEnd.y), Colors.red);
 
     // Y Axis (Green)
-    final yAxisEnd = project(
-      vector.Vector3(0, 50, 0),
-    ); // Use a fixed world length
+    final yAxisEnd = project(vector.Vector3(0, 50, 0));
     canvas.drawLine(
       Offset(origin.x, origin.y),
       Offset(yAxisEnd.x, yAxisEnd.y),
@@ -447,182 +687,320 @@ class _GcodePainter extends CustomPainter {
     paintAxisLabel('Y', Offset(yAxisEnd.x, yAxisEnd.y), Colors.green);
 
     // Z Axis (Blue)
-    final zAxisEnd = project(
-      vector.Vector3(0, 0, 50),
-    ); // Use a fixed world length
+    final zAxisEnd = project(vector.Vector3(0, 0, 50));
     canvas.drawLine(
       Offset(origin.x, origin.y),
-      Offset(
-        zAxisEnd.x,
-        zAxisEnd.y,
-      ), // Draw Z axis based on its projected position
+      Offset(zAxisEnd.x, zAxisEnd.y),
       axisPaint..color = Colors.blue,
     );
     paintAxisLabel('Z', Offset(zAxisEnd.x, zAxisEnd.y), Colors.blue);
+  }
 
-    // --- Draw Path Segments ---
-    if (pathPoints.isEmpty) return; // No points to draw
+  // Get cached paths or generate new ones
+  List<ui.Path> _getCachedPaths(
+    bool isTravel,
+    bool reduceDetail,
+    Function project,
+    List<GcodePath> pathSegments,
+    String offsetKey,
+  ) {
+    // Include offset in cache key to ensure paths are regenerated when panning
+    final String cacheKey =
+        "${isTravel ? "travel" : "cutting"}_${zoom.toStringAsFixed(2)}_$offsetKey";
+    final List<ui.Path> resultPaths = [];
 
-    // Create path segments list
-    List<GcodePath> pathSegments = [];
-
-    // If we have precalculated path segments, use them
-    if (kDebugMode) {
-      print("Drawing G-code with ${pathPoints.length} points");
+    // Return from cache if available and not needing rebuild
+    if (usePathCaching &&
+        !needsPathRebuild &&
+        pathCache.containsKey(cacheKey)) {
+      return [pathCache[cacheKey]!];
     }
 
-    // If segments not provided, rebuild from scratch
-    if (pathSegments.isEmpty) {
-      // Create a simple travel/cutting path split for visualization
+    // Create new path
+    final ui.Path combinedPath = Path();
+
+    // Filtering function for segments
+    bool shouldDrawSegment(GcodePath segment) {
+      return segment.isTravel == isTravel;
+    }
+
+    // Apply path reduction if needed
+    final filteredSegments = pathSegments.where(shouldDrawSegment).toList();
+
+    // Apply level-of-detail reduction if needed
+    final segmentsToRender =
+        reduceDetail
+            ? _applyLevelOfDetail(filteredSegments, maxPointsToRender)
+            : filteredSegments;
+
+    // Draw all segments
+    for (final segment in segmentsToRender) {
+      if (segment.points.length < 2) continue;
+
+      final path = Path();
+      final firstPoint = project(segment.points[0]);
+      path.moveTo(firstPoint.x, firstPoint.y);
+
+      // Add points to the path
+      for (int i = 1; i < segment.points.length; i++) {
+        final point = project(segment.points[i]);
+        path.lineTo(point.x, point.y);
+      }
+
+      // Add to combined path
+      combinedPath.addPath(path, Offset.zero);
+    }
+
+    // Store in cache if enabled
+    if (usePathCaching) {
+      pathCache[cacheKey] = combinedPath;
+    }
+
+    resultPaths.add(combinedPath);
+    return resultPaths;
+  }
+
+  // Apply level-of-detail reduction to segments
+  List<GcodePath> _applyLevelOfDetail(List<GcodePath> segments, int maxPoints) {
+    // If we have few segments, just return them all
+    if (segments.isEmpty) return segments;
+
+    // Count total points
+    int totalPoints = segments.fold(0, (sum, seg) => sum + seg.points.length);
+
+    // If under limit, return all segments
+    if (totalPoints <= maxPoints) return segments;
+
+    // Create simplified segments
+    final List<GcodePath> simplifiedSegments = [];
+
+    for (final segment in segments) {
+      if (segment.points.length < 2) continue;
+
+      // For very short segments or segments with few points, keep them intact
+      if (segment.points.length <= 8) {
+        simplifiedSegments.add(segment);
+        continue;
+      }
+
+      // Analyze the segment to detect small features like tabs, if enabled
+      bool isSmallFeature =
+          preserveSmallFeatures &&
+          _isLikelySmallFeature(segment, smallFeatureThreshold);
+
+      // Preserve small features (like tabs) with higher detail
+      if (isSmallFeature) {
+        // If it's a small feature, keep most points
+        final skipFactor = math.max(2, (segment.points.length / 20).ceil());
+        final List<vector.Vector3> simplifiedPoints = _simplifyWithSkipFactor(
+          segment.points,
+          skipFactor,
+        );
+        simplifiedSegments.add(GcodePath(simplifiedPoints, segment.isTravel));
+      } else {
+        // For regular segments, calculate skip factor based on total points
+        final skipFactor = (totalPoints / maxPoints * 2).ceil();
+        final List<vector.Vector3> simplifiedPoints = _simplifyWithSkipFactor(
+          segment.points,
+          skipFactor,
+        );
+        simplifiedSegments.add(GcodePath(simplifiedPoints, segment.isTravel));
+      }
+    }
+
+    return simplifiedSegments;
+  }
+
+  // Helper function to detect if a feature is likely a small feature (like a tab)
+  bool _isLikelySmallFeature(GcodePath segment, double threshold) {
+    if (segment.points.length < 3) return false;
+
+    // Find bounding box
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = double.negativeInfinity;
+    double maxY = double.negativeInfinity;
+
+    for (final point in segment.points) {
+      minX = math.min(minX, point.x);
+      minY = math.min(minY, point.y);
+      maxX = math.max(maxX, point.x);
+      maxY = math.max(maxY, point.y);
+    }
+
+    // Calculate dimensions
+    double width = maxX - minX;
+    double height = maxY - minY;
+    double area = width * height;
+
+    // Calculate perimeter (approximate)
+    double perimeter = 0;
+    for (int i = 0; i < segment.points.length - 1; i++) {
+      final p1 = segment.points[i];
+      final p2 = segment.points[i + 1];
+      final dx = p2.x - p1.x;
+      final dy = p2.y - p1.y;
+      perimeter += math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Tab detection: Check for sharp corners - a sign of rectangular features like tabs
+    int sharpCorners = 0;
+    for (int i = 1; i < segment.points.length - 1; i++) {
+      final prev = segment.points[i - 1];
+      final curr = segment.points[i];
+      final next = segment.points[i + 1];
+
+      final v1x = curr.x - prev.x;
+      final v1y = curr.y - prev.y;
+      final v1len = math.sqrt(v1x * v1x + v1y * v1y);
+
+      final v2x = next.x - curr.x;
+      final v2y = next.y - curr.y;
+      final v2len = math.sqrt(v2x * v2x + v2y * v2y);
+
+      if (v1len > 0.0001 && v2len > 0.0001) {
+        // Normalize vectors
+        final v1nx = v1x / v1len;
+        final v1ny = v1y / v1len;
+        final v2nx = v2x / v2len;
+        final v2ny = v2y / v2len;
+
+        // Calculate dot product to find angle
+        final dot = v1nx * v2nx + v1ny * v2ny;
+        final angle = math.acos(dot.clamp(-1.0, 1.0));
+
+        // If angle is close to 90 degrees (or less), count as sharp corner
+        if (angle > math.pi / 4) {
+          sharpCorners++;
+        }
+      }
+    }
+
+    // Ratio of perimeter squared to area - higher for complex shapes
+    double complexity = (perimeter * perimeter) / (4 * math.pi * area);
+
+    // Check if this is likely a tab:
+    // 1. Small area compared to threshold
+    // 2. Rectangular-ish (close to square or slightly elongated)
+    // 3. Has some sharp corners (rectangular features have at least 3-4)
+    return (area < threshold * threshold && // Small area
+        (width < threshold ||
+            height < threshold) && // At least one dimension is small
+        complexity > 1.1 && // More complex than a simple circle
+        sharpCorners >= 2); // Has some sharp corners
+  }
+
+  // Simplify a segment by skipping points based on a skip factor
+  List<vector.Vector3> _simplifyWithSkipFactor(
+    List<vector.Vector3> points,
+    int skipFactor,
+  ) {
+    if (skipFactor <= 1 || points.length <= 3) return List.from(points);
+
+    final List<vector.Vector3> simplified = [];
+
+    // Always include first point
+    simplified.add(points.first);
+
+    // Add interior points based on skip factor
+    for (int i = 1; i < points.length - 1; i++) {
+      // Include point if it's a multiple of skip factor, or if it's a sharp turn
+      bool isSharpTurn = false;
+
+      if (i > 1 && i < points.length - 2) {
+        final prev = points[i - 1];
+        final curr = points[i];
+        final next = points[i + 1];
+
+        // Calculate vectors between points
+        final v1 = vector.Vector2(curr.x - prev.x, curr.y - prev.y);
+        final v2 = vector.Vector2(next.x - curr.x, next.y - curr.y);
+
+        // Normalize vectors
+        if (v1.length > 0.0001 && v2.length > 0.0001) {
+          v1.normalize();
+          v2.normalize();
+
+          // Calculate dot product to find angle between vectors
+          final dotProduct = v1.dot(v2);
+
+          // If dot product is small or negative, it's a sharp turn
+          isSharpTurn = dotProduct < 0.7; // Approx 45 degrees or more
+        }
+      }
+
+      // Include the point if it's at a skip index, a sharp turn, or key positional point
+      if (i % skipFactor == 0 || isSharpTurn) {
+        simplified.add(points[i]);
+      }
+    }
+
+    // Always include last point
+    if (points.length > 1) {
+      simplified.add(points.last);
+    }
+
+    return simplified;
+  }
+
+  // Special rendering for the first travel path to highlight it
+  void _renderFirstTravelPath(
+    Canvas canvas,
+    Paint paint,
+    Function project,
+    List<GcodePath> pathSegments,
+  ) {
+    // Find the first travel segment
+    final firstTravelSegment = pathSegments.firstWhere(
+      (seg) => seg.isTravel,
+      orElse: () => pathSegments.first,
+    );
+
+    if (firstTravelSegment.isTravel && firstTravelSegment.points.length >= 2) {
+      // Use a more visible paint style
+      final specialPaint =
+          Paint()
+            ..color = travelColor
+            ..strokeWidth =
+                pathThickness *
+                1.5 // Thicker
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round;
+
+      final path = Path();
+      final firstPoint = project(firstTravelSegment.points[0]);
+      path.moveTo(firstPoint.x, firstPoint.y);
+
+      for (int i = 1; i < firstTravelSegment.points.length; i++) {
+        final point = project(firstTravelSegment.points[i]);
+        path.lineTo(point.x, point.y);
+      }
+
+      // Draw with a double stroke for better visibility
+      canvas.drawPath(path, specialPaint);
+
       if (kDebugMode) {
-        print("No path segments found - creating from flags");
+        print(
+          "First travel movement drawn highlighted: ${firstTravelSegment.points.first} -> ${firstTravelSegment.points.last}",
+        );
       }
-
-      List<vector.Vector3> currentPath = [];
-      bool isCurrentPathTravel = false;
-      bool pathStarted = false;
-
-      for (int i = 0; i < pathPoints.length; i++) {
-        bool isPointTravel =
-            i < isTravelFlags.length ? isTravelFlags[i] : false;
-
-        if (!pathStarted) {
-          // Start first path
-          currentPath.add(pathPoints[i]);
-          isCurrentPathTravel = isPointTravel;
-          pathStarted = true;
-        } else if (isPointTravel != isCurrentPathTravel) {
-          // When travel status changes, finish the current path
-          pathSegments.add(
-            GcodePath(List.from(currentPath), isCurrentPathTravel),
-          );
-
-          // Start a new path
-          currentPath = [pathPoints[i - 1].clone(), pathPoints[i].clone()];
-          isCurrentPathTravel = isPointTravel;
-        } else {
-          // Continue current path
-          currentPath.add(pathPoints[i]);
-        }
-      }
-
-      // Add the final path segment
-      if (currentPath.isNotEmpty) {
-        pathSegments.add(GcodePath(currentPath, isCurrentPathTravel));
-      }
-    }
-
-    if (kDebugMode) {
-      print("Drawing ${pathSegments.length} path segments");
-      print("Cut paths: ${pathSegments.where((p) => !p.isTravel).length}");
-      print("Travel paths: ${pathSegments.where((p) => p.isTravel).length}");
-    }
-
-    // Draw all cutting paths first
-    paint.color = cutColor;
-    paint.strokeWidth = pathThickness;
-    paint.maskFilter = const MaskFilter.blur(
-      BlurStyle.normal,
-      0.5,
-    ); // Shadow for depth
-
-    for (final segment in pathSegments) {
-      if (segment.isTravel) continue; // Skip travel paths for now
-      if (segment.points.length < 2) continue; // Need at least 2 points to draw
-
-      final path = Path();
-      var firstPoint = project(segment.points[0]);
-      path.moveTo(firstPoint.x, firstPoint.y);
-
-      for (int i = 1; i < segment.points.length; i++) {
-        final point = project(segment.points[i]);
-        path.lineTo(point.x, point.y);
-      }
-
-      canvas.drawPath(path, paint);
-    }
-
-    // Then draw all travel paths
-    paint.color = travelColor;
-    paint.strokeWidth =
-        pathThickness * 1.2; // Plus épais que les déplacements de coupe
-    paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5);
-    paint.strokeCap = StrokeCap.round;
-    paint.strokeJoin = StrokeJoin.round;
-
-    // Dessiner d'abord le premier déplacement avec une couleur accentuée si disponible
-    if (pathSegments.isNotEmpty && pathSegments.any((seg) => seg.isTravel)) {
-      // Trouver le premier déplacement
-      final firstTravelSegment = pathSegments.firstWhere(
-        (seg) => seg.isTravel,
-        orElse: () => pathSegments.first,
-      );
-
-      if (firstTravelSegment.isTravel &&
-          firstTravelSegment.points.length >= 2) {
-        // Dessiner le premier déplacement avec une couleur plus vive
-        final specialPaint =
-            Paint()
-              ..color = travelColor
-              ..strokeWidth =
-                  pathThickness *
-                  1.5 // Encore plus épais
-              ..style = PaintingStyle.stroke
-              ..strokeCap = StrokeCap.round
-              ..strokeJoin = StrokeJoin.round;
-
-        final path = Path();
-        var firstPoint = project(firstTravelSegment.points[0]);
-        path.moveTo(firstPoint.x, firstPoint.y);
-
-        for (int i = 1; i < firstTravelSegment.points.length; i++) {
-          final point = project(firstTravelSegment.points[i]);
-          path.lineTo(point.x, point.y);
-        }
-
-        // Dessiner avec un double trait pour le rendre plus visible
-        canvas.drawPath(path, specialPaint);
-
-        if (kDebugMode) {
-          print(
-            "Premier déplacement dessiné en surbrillance: ${firstTravelSegment.points.first} -> ${firstTravelSegment.points.last}",
-          );
-        }
-      }
-    }
-
-    // Dessiner les autres déplacements rapides
-    for (final segment in pathSegments) {
-      if (!segment.isTravel) continue; // Skip cutting paths
-      if (segment.points.length < 2) continue; // Need at least 2 points to draw
-
-      final path = Path();
-      var firstPoint = project(segment.points[0]);
-      path.moveTo(firstPoint.x, firstPoint.y);
-
-      for (int i = 1; i < segment.points.length; i++) {
-        final point = project(segment.points[i]);
-        path.lineTo(point.x, point.y);
-      }
-
-      canvas.drawPath(path, paint);
     }
   }
 
   @override
   bool shouldRepaint(covariant _GcodePainter oldDelegate) {
-    // Repaint if any of the parameters change
+    // Optimize repaint decisions
     return oldDelegate.transform != transform ||
         oldDelegate.zoom != zoom ||
         oldDelegate.offset != offset ||
-        !listEquals(oldDelegate.pathPoints, pathPoints) ||
-        !listEquals(oldDelegate.isTravelFlags, isTravelFlags) ||
-        !listEquals(oldDelegate.zValues, zValues) ||
         oldDelegate.pathThickness != pathThickness ||
         oldDelegate.cutColor != cutColor ||
         oldDelegate.travelColor != travelColor ||
         oldDelegate.gridColor != gridColor ||
         oldDelegate.showGrid != showGrid ||
-        oldDelegate.isMillimeters != isMillimeters;
+        oldDelegate.isMillimeters != isMillimeters ||
+        needsPathRebuild ||
+        oldDelegate.parsedGcode != parsedGcode;
   }
 }
