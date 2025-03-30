@@ -563,7 +563,7 @@ class _GcodePainter extends CustomPainter {
         // Dessiner le premier déplacement avec une couleur plus vive
         final specialPaint =
             Paint()
-              ..color = travelColor.withOpacity(1.0) // Opacité à 100%
+              ..color = travelColor
               ..strokeWidth =
                   pathThickness *
                   1.5 // Encore plus épais

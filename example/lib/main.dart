@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:gcode_view/gcode_view.dart';
 import 'package:file_picker/file_picker.dart';
 
@@ -15,7 +14,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'G-code Viewer - Tester G0',
+      title: 'G-code Viewer - G0 Tester',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
@@ -37,28 +36,28 @@ class _MyHomePageState extends State<MyHomePage> {
   bool isLoading = true;
   String currentFilePath = "";
 
-  // Couleurs bien visibles
+  // Vibrant colors for visibility
   final Color cutColor = Colors.blue;
   final Color travelColor = Colors.red.withAlpha(90);
-  double pathThickness = 1.0; // Plus épais pour mieux voir
+  double pathThickness = 1.0; // Thicker for better visibility
   final controller = GcodeViewerController();
 
   @override
   void initState() {
     super.initState();
-    // Commencer avec le G-code par défaut
+    // Start with default G-code
     setState(() {
       gcode = """
-; Définir une position d'origine pour s'assurer que le premier mouvement est visible
+; Set origin position to ensure first movement is visible
 G92 X0 Y0 Z0
-; Premier déplacement G0 explicite
+; First explicit G0 movement
 G0 X0 Y0 Z0
-; Déplacements tests pour visualiser les trajectoires G0
+; Test movements to visualize G0 trajectories
 G0 X100 Y0 Z0
 G0 X100 Y100 Z0
 G0 X0 Y100 Z0
 G0 X0 Y0 Z0
-; Déplacement vers la position de travail
+; Move to working position
 G0 X114.655 Y41.819 Z15
 G0 Z5
 G1 Z-15 F500
@@ -74,7 +73,7 @@ G1 X114.655 Y41.819
 G0 Z15
 G0 X0 Y0 Z15
 """;
-      currentFilePath = "Exemple G-code";
+      currentFilePath = "Sample G-code";
       isLoading = false;
     });
   }
@@ -103,26 +102,26 @@ G0 X0 Y0 Z15
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Fichier chargé: $currentFilePath'),
+              content: Text('File loaded: $currentFilePath'),
               duration: const Duration(seconds: 2),
             ),
           );
         });
       } else {
-        // L'utilisateur a annulé la sélection
+        // User cancelled selection
         setState(() {
           isLoading = false;
         });
       }
     } catch (e) {
-      print('Erreur de chargement: $e');
+      print('Loading error: $e');
 
       setState(() {
         isLoading = false;
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erreur: $e'),
+            content: Text('Error: $e'),
             duration: const Duration(seconds: 3),
             backgroundColor: Colors.red,
           ),
@@ -135,7 +134,7 @@ G0 X0 Y0 Z15
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Test G0 - ${currentFilePath.split('/').last}'),
+        title: Text('G0 Test - ${currentFilePath.split('/').last}'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
@@ -143,15 +142,15 @@ G0 X0 Y0 Z15
             onPressed: () {
               controller.resetView();
             },
-            tooltip: 'Réinitialiser la vue',
+            tooltip: 'Reset view',
           ),
           IconButton(
             icon: const Icon(Icons.file_open),
             onPressed: () {
-              // Permettre de charger différents fichiers de test
+              // Allow loading different test files
               _showFileSelectionDialog();
             },
-            tooltip: 'Ouvrir un fichier',
+            tooltip: 'Open file',
           ),
         ],
       ),
@@ -175,17 +174,6 @@ G0 X0 Y0 Z15
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Problème testé:',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8.0),
-                  child: Text(
-                    'Vérifier que le déplacement G0 X114.655 Y41.819 est visible en rouge',
-                    style: TextStyle(fontStyle: FontStyle.italic),
-                  ),
-                ),
                 Row(
                   children: [
                     Container(
@@ -195,7 +183,7 @@ G0 X0 Y0 Z15
                       margin: const EdgeInsets.only(right: 8),
                     ),
                     const Text(
-                      'G0 - Déplacements rapides (ROUGE)',
+                      'G0 - Rapid movements (RED)',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -210,7 +198,7 @@ G0 X0 Y0 Z15
                       margin: const EdgeInsets.only(right: 8),
                     ),
                     const Text(
-                      'G1 - Déplacements de coupe (BLEU)',
+                      'G1 - Working movements (BLUE)',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -227,13 +215,13 @@ G0 X0 Y0 Z15
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Choisir un fichier G-code'),
+        title: const Text('Choose a G-code file'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
               leading: const Icon(Icons.upload_file),
-              title: const Text('Sélectionner un fichier G-code'),
+              title: const Text('Select G-code file'),
               onTap: () {
                 Navigator.pop(context);
                 _pickAndLoadGcodeFile();
@@ -241,22 +229,22 @@ G0 X0 Y0 Z15
             ),
             ListTile(
               leading: const Icon(Icons.file_present),
-              title: const Text('G-code exemple (pince)'),
+              title: const Text('Sample G-code (gripper)'),
               onTap: () {
                 Navigator.pop(context);
-                // Utiliser le G-code par défaut qui correspond à votre pince
+                // Use default G-code that matches your gripper
                 setState(() {
                   gcode = """
-; Définir une position d'origine pour s'assurer que le premier mouvement est visible
+; Set origin position to ensure first movement is visible
 G92 X0 Y0 Z0
-; Premier déplacement G0 explicite
+; First explicit G0 movement
 G0 X0 Y0 Z0
-; Déplacements tests pour visualiser les trajectoires G0
+; Test movements to visualize G0 trajectories
 G0 X100 Y0 Z0
 G0 X100 Y100 Z0
 G0 X0 Y100 Z0
 G0 X0 Y0 Z0
-; Déplacement vers la position de travail
+; Move to working position
 G0 X114.655 Y41.819 Z15
 G0 Z5
 G1 Z-15 F500
@@ -272,25 +260,25 @@ G1 X114.655 Y41.819
 G0 Z15
 G0 X0 Y0 Z15
 """;
-                  currentFilePath = "Exemple G-code";
+                  currentFilePath = "Sample G-code";
                 });
               },
             ),
             ListTile(
               leading: const Icon(Icons.settings_outlined),
-              title: const Text('Test visibilité G0'),
+              title: const Text('G0 visibility test'),
               onTap: () {
                 Navigator.pop(context);
                 setState(() {
                   gcode = """
-; Test spécifique pour voir tous les G0
+; Specific test to see all G0
 G92 X0 Y0 Z0
 G0 X0 Y0 Z0
 G0 X50 Y0 Z0
 G0 X50 Y50 Z0
 G0 X0 Y50 Z0
 G0 X0 Y0 Z0
-; Test avec Z
+; Test with Z
 G0 X0 Y0 Z10
 G0 X50 Y0 Z10
 G0 X50 Y50 Z10
@@ -298,7 +286,7 @@ G0 X0 Y50 Z10
 G0 X0 Y0 Z10
 G0 X0 Y0 Z0
 """;
-                  currentFilePath = "Test G0";
+                  currentFilePath = "G0 Test";
                 });
               },
             ),
@@ -307,7 +295,7 @@ G0 X0 Y0 Z0
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Annuler'),
+            child: const Text('Cancel'),
           ),
         ],
       ),
