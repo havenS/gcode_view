@@ -34,6 +34,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String gcode = "";
   bool isLoading = true;
   String currentFilePath = "";
+  bool showGrid = true;
 
   // Vibrant colors for visibility
   final Color cutColor = Colors.blue;
@@ -122,6 +123,15 @@ class _MyHomePageState extends State<MyHomePage> {
             tooltip: 'Reset view',
           ),
           IconButton(
+            icon: const Icon(Icons.grid_on),
+            onPressed: () {
+              setState(() {
+                showGrid = !showGrid;
+              });
+            },
+            tooltip: 'Toggle grid',
+          ),
+          IconButton(
             icon: const Icon(Icons.file_open),
             onPressed: _pickAndLoadGcodeFile,
             tooltip: 'Open file',
@@ -174,7 +184,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         cutColor: cutColor,
                         travelColor: travelColor,
                         pathThickness: pathThickness,
-                        showGrid: true,
+                        showGrid: showGrid,
                         controller: controller,
                         config: viewerConfig,
                       ),
