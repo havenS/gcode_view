@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:gcode_view/gcode_view.dart';
 import 'package:file_picker/file_picker.dart';
@@ -92,7 +93,9 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       }
     } catch (e) {
-      print('Loading error: $e');
+      if (kDebugMode) {
+        print('Loading error: $e');
+      }
 
       setState(() {
         isLoading = false;

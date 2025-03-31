@@ -2,84 +2,13 @@ import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:gcode_view/gcode_view.dart';
+import 'package:gcode_view/src/configs/gcode_parser_config.dart';
+import 'package:gcode_view/src/gcode_parser.dart';
+import 'package:gcode_view/src/models/gcode_path.dart';
+import 'package:gcode_view/src/models/parsed_gcode.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
-import 'gcode_parser.dart';
 import 'dart:math' as math;
-
-/// Controller to interact with a [GcodeViewer] instance.
-class GcodeViewerController {
-  VoidCallback? _resetViewCallback;
-  VoidCallback? _refreshViewCallback;
-
-  /// Resets the camera view (position, rotation, zoom) to its initial state.
-  void resetView() {
-    _resetViewCallback?.call();
-  }
-
-  /// Forces a refresh of the view.
-  void refreshView() {
-    _refreshViewCallback?.call();
-  }
-
-  // Internal methods for the widget to register its state's methods
-  void _attach(VoidCallback resetCallback, VoidCallback refreshCallback) {
-    _resetViewCallback = resetCallback;
-    _refreshViewCallback = refreshCallback;
-  }
-
-  void _detach() {
-    _resetViewCallback = null;
-    _refreshViewCallback = null;
-  }
-}
-
-/// Viewer configuration for controlling performance and detail level
-class GcodeViewerConfig {
-  /// Controls the sensitivity of zooming gestures
-  final double zoomSensitivity;
-
-  /// Whether to use path caching for better performance
-  final bool usePathCaching;
-
-  /// Whether to use level-of-detail rendering based on zoom
-  final bool useLevelOfDetail;
-
-  /// Maximum points to render at once for performance (0 = no limit)
-  final int maxPointsToRender;
-
-  /// Detail level for arc rendering
-  final double arcDetailLevel;
-
-  /// Whether to enable enhanced small feature detection (tabs, slots)
-  final bool preserveSmallFeatures;
-
-  /// Threshold in mm below which features are considered "small" and preserved
-  final double smallFeatureThreshold;
-
-  /// Create a viewer configuration
-  const GcodeViewerConfig({
-    this.zoomSensitivity = 0.5,
-    this.usePathCaching = true,
-    this.useLevelOfDetail = true,
-    this.maxPointsToRender = 10000,
-    this.arcDetailLevel = 1.0,
-    this.preserveSmallFeatures = true,
-    this.smallFeatureThreshold = 5.0,
-  });
-
-  /// Returns a high detail configuration optimized for small feature rendering
-  factory GcodeViewerConfig.highDetail() {
-    return const GcodeViewerConfig(
-      zoomSensitivity: 0.5,
-      usePathCaching: true,
-      useLevelOfDetail: false, // Disable LOD for high detail rendering
-      maxPointsToRender: 100000, // Allow many more points to render
-      arcDetailLevel: 4.0, // Very high arc detail
-      preserveSmallFeatures: true, // Always preserve small features
-      smallFeatureThreshold: 20.0, // More aggressive small feature detection
-    );
-  }
-}
 
 /// A widget for visualizing G-code paths in 3D.
 class GcodeViewer extends StatefulWidget {
@@ -164,9 +93,8 @@ class _GcodeViewerState extends State<GcodeViewer> {
   final Map<String, ui.Path> _pathCache = {};
   bool _needsPathRebuild = true;
 
-  // Repaint throttling
+  // Repaint timer
   Timer? _repaintTimer;
-  bool _pendingRepaint = false;
 
   // Configuration
   late GcodeViewerConfig _config;
@@ -176,7 +104,7 @@ class _GcodeViewerState extends State<GcodeViewer> {
     super.initState();
     _transform = _initialTransform.clone();
     _config = widget.config ?? const GcodeViewerConfig();
-    widget.controller?._attach(_resetView, _refreshView);
+    widget.controller?.attach(_resetView, _refreshView);
     _parseAndUpdatePath(); // Parse initial G-code
   }
 
@@ -191,8 +119,8 @@ class _GcodeViewerState extends State<GcodeViewer> {
 
     bool controllerChanged = false;
     if (widget.controller != oldWidget.controller) {
-      oldWidget.controller?._detach();
-      widget.controller?._attach(_resetView, _refreshView);
+      oldWidget.controller?.detach();
+      widget.controller?.attach(_resetView, _refreshView);
       controllerChanged = true;
     }
 
@@ -261,34 +189,11 @@ class _GcodeViewerState extends State<GcodeViewer> {
     _needsPathRebuild = true;
   }
 
-  // Throttled repaint request
-  void _requestRepaint() {
-    if (_repaintTimer != null && _repaintTimer!.isActive) {
-      // A repaint is already scheduled
-      _pendingRepaint = true;
-      return;
-    }
-
-    // Schedule a new repaint
-    setState(() {
-      // Just trigger a rebuild
-    });
-
-    // Set a timer to handle additional repaint requests
-    _repaintTimer = Timer(const Duration(milliseconds: 16), () {
-      if (_pendingRepaint) {
-        _pendingRepaint = false;
-        // If there was a pending repaint request, do it now
-        setState(() {});
-      }
-    });
-  }
-
   @override
   void dispose() {
     _repaintTimer?.cancel();
     _pathCache.clear();
-    widget.controller?._detach();
+    widget.controller?.detach();
     super.dispose();
   }
 

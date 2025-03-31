@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gcode_view/gcode_view.dart';
 import 'package:flutter/material.dart';
+import 'package:gcode_view/src/gcode_parser.dart';
+import 'package:gcode_view/src/models/parsed_gcode.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 
 void main() {

@@ -5,7 +5,7 @@
 library;
 
 export 'src/gcode_viewer.dart';
-export 'src/gcode_parser.dart'
-    show GcodePath, ParsedGcode, parseGcode, GcodeParserConfig;
-export 'src/gcode_viewer.dart'
-    show GcodeViewerController, GcodeViewerConfig, GcodeViewer;
+export 'src/gcode_viewer.dart' show GcodeViewer;
+export 'src/controllers/gcode_viewer_controller.dart'
+    show GcodeViewerController;
+export 'src/configs/gcode_viewer_config.dart' show GcodeViewerConfig;

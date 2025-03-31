@@ -1,92 +1,9 @@
 import 'package:flutter/foundation.dart';
+import 'package:gcode_view/src/configs/gcode_parser_config.dart';
+import 'package:gcode_view/src/models/gcode_path.dart';
+import 'package:gcode_view/src/models/parsed_gcode.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'dart:math' as math;
-
-/// A class to hold path segments in G-code.
-class GcodePath {
-  /// Points that make up this path segment.
-  final List<vector.Vector3> points;
-
-  /// Whether this path represents a travel move (non-cutting).
-  final bool isTravel;
-
-  /// Creates a path segment with the specified points and travel flag.
-  GcodePath(this.points, this.isTravel);
-}
-
-/// Result of parsing G-code containing points, flags, and metadata.
-class ParsedGcode {
-  /// All points in the G-code path.
-  final List<vector.Vector3> points;
-
-  /// Flags indicating whether each point is part of a travel move.
-  final List<bool> isTravel;
-
-  /// Z-values for all points.
-  final List<double> zValues;
-
-  /// Path segments extracted from the G-code.
-  List<GcodePath> pathSegments = [];
-
-  /// Creates a new parsed G-code result.
-  ParsedGcode(this.points, this.isTravel, this.zValues);
-
-  /// Analyze and determine the actual Z-levels used for operations.
-  /// Returns a Map of Z-values to normalized values (0.0-1.0).
-  Map<double, double> getNormalizedZLevels() {
-    if (zValues.isEmpty) return {};
-
-    // Get unique Z values
-    final Set<double> uniqueZValues = zValues.toSet();
-    final List<double> sortedZ = uniqueZValues.toList()..sort();
-
-    // Create map of actual Z values to normalized values (0-1)
-    final Map<double, double> zToNormalized = {};
-    if (sortedZ.length == 1) {
-      // Only one Z level, set it to middle of range
-      zToNormalized[sortedZ.first] = 0.5;
-    } else {
-      // Multiple Z levels - map each to normalized value
-      final double minZ = sortedZ.first;
-      final double maxZ = sortedZ.last;
-      final double range = maxZ - minZ;
-
-      if (range < 0.0001) {
-        // If range is too small, treat as single level
-        for (final z in sortedZ) {
-          zToNormalized[z] = 0.5;
-        }
-      } else {
-        // Normal case - map to 0.0-1.0 range
-        for (final z in sortedZ) {
-          zToNormalized[z] = (z - minZ) / range;
-        }
-      }
-    }
-
-    return zToNormalized;
-  }
-}
-
-/// Parser configuration for controlling performance and detail level
-class GcodeParserConfig {
-  /// Detail level for arc rendering (1.0 = normal, higher = more detailed)
-  final double arcDetailLevel;
-
-  /// Minimum distance in units between points before simplification
-  /// Smaller values = more detailed paths, larger values = more performance
-  final double segmentThreshold;
-
-  /// Maximum segments for arcs (prevent excessive detailing)
-  final int maxArcSegments;
-
-  /// Create a parser configuration
-  const GcodeParserConfig({
-    this.arcDetailLevel = 1.0,
-    this.segmentThreshold = 0.05, // Default to 0.05mm threshold
-    this.maxArcSegments = 300, // Cap for performance
-  });
-}
 
 /// Parses a G-code string into a structured format.
 ///
@@ -99,7 +16,6 @@ ParsedGcode parseGcode(String gcode, {GcodeParserConfig? config}) {
 
   // Pre-allocate estimated capacity for collections to prevent frequent resizing
   final lines = gcode.split('\n');
-  final estimatedPoints = math.min(lines.length * 2, 10000);
 
   final List<vector.Vector3> allPoints = List.empty(growable: true)..length = 0;
   final List<bool> allIsTravelFlags = List.empty(growable: true)..length = 0;
@@ -577,11 +493,8 @@ List<vector.Vector3> calculateArcPoints(
     segments = math.max(segments, 12);
   }
 
-  // Calculate points along the arc using adaptive segment count
-  double lastAngle = startAngle;
-  vector.Vector3? lastPoint = arcPoints.first;
-
   // Generate more equidistant points
+  vector.Vector3? lastPoint = arcPoints.first;
   for (int i = 1; i <= segments; i++) {
     final t = i / segments;
     final angle = startAngle + t * sweepAngle;
@@ -615,7 +528,6 @@ List<vector.Vector3> calculateArcPoints(
 
       arcPoints.add(point);
       lastPoint = point;
-      lastAngle = angle;
     }
   }
 
