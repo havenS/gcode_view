@@ -14,6 +14,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'G-code Viewer',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
@@ -179,6 +180,7 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           // Info bar with gesture instructions
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
             color: Colors.grey.shade100,
             child: Row(
@@ -209,39 +211,53 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           // Combined mode selector and color legend
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(16),
             color: Colors.grey.shade200,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 // Color legend
-                Row(
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
                   children: [
-                    Container(
-                      width: 20,
-                      height: 20,
-                      color: travelColor,
-                      margin: const EdgeInsets.only(right: 8),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 20,
+                          height: 20,
+                          color: travelColor,
+                          margin: const EdgeInsets.only(right: 8),
+                        ),
+                        const Text(
+                          'G0 - Rapid movements (RED)',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
                     ),
-                    const Text(
-                      'G0 - Rapid movements (RED)',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(width: 16),
-                    Container(
-                      width: 20,
-                      height: 20,
-                      color: cutColor,
-                      margin: const EdgeInsets.only(right: 8),
-                    ),
-                    const Text(
-                      'G1 - Working movements (BLUE)',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 20,
+                          height: 20,
+                          color: cutColor,
+                          margin: const EdgeInsets.only(right: 8),
+                        ),
+                        const Text(
+                          'G1 - Working movements (BLUE)',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
                 // Mode selector
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Text('Move Mode'),
                     Switch(
