@@ -83,6 +83,9 @@ class _GcodeViewerState extends State<GcodeViewer> {
   // Previous focal point for scaling/panning
   Offset? _lastFocalPoint;
 
+  // Camera mode (true for rotation, false for movement)
+  bool _isRotationMode = false;
+
   // Store parsed G-code results
   late ParsedGcode _parsedGcode;
   List<vector.Vector3> _pathPoints = [];
@@ -201,9 +204,13 @@ class _GcodeViewerState extends State<GcodeViewer> {
   void _resetView() {
     setState(() {
       _transform = _initialTransform.clone();
+
+      // Reset zoom and offset
       _zoom = 1.0;
       _offset = Offset.zero;
       _lastFocalPoint = null;
+
+      _invalidatePathCache();
     });
   }
 
@@ -222,99 +229,182 @@ class _GcodeViewerState extends State<GcodeViewer> {
         // Center the view initially
         final initialOffset = Offset(size.width / 2, size.height / 2);
 
-        return GestureDetector(
-          onScaleStart: (details) {
-            _lastFocalPoint = details.localFocalPoint;
-          },
-          onScaleUpdate: (details) {
-            if (_lastFocalPoint == null) return;
+        return Column(
+          children: [
+            // Mode switch
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Move Mode'),
+                  Switch(
+                    value: _isRotationMode,
+                    onChanged: (value) {
+                      setState(() {
+                        _isRotationMode = value;
+                      });
+                    },
+                  ),
+                  const Text('Rotate Mode'),
+                ],
+              ),
+            ),
+            // Viewer
+            Expanded(
+              child: GestureDetector(
+                onScaleStart: (details) {
+                  _lastFocalPoint = details.localFocalPoint;
+                },
+                onScaleUpdate: (details) {
+                  if (_lastFocalPoint == null) return;
 
-            final focalPoint = details.localFocalPoint;
-            final delta = focalPoint - _lastFocalPoint!;
-            final scaleDelta = details.scale;
+                  final focalPoint = details.localFocalPoint;
+                  final delta = focalPoint - _lastFocalPoint!;
+                  final scaleDelta = details.scale;
 
-            if (scaleDelta == 1.0) {
-              // Pan operation (one-finger drag) - Force path cache invalidation for proper panning
-              setState(() {
-                _offset += delta;
-                _invalidatePathCache(); // Important: Invalidate cache to ensure paths move with grid
-              });
-            } else {
-              // Zoom operation (pinch)
+                  if (_isRotationMode) {
+                    // Rotation mode: rotate the view based on drag direction
+                    setState(() {
+                      // Apply rotations around the focal point
+                      final centerOffset =
+                          Offset(size.width / 2, size.height / 2) + _offset;
+                      final focalPointVec = vector.Vector3(
+                        focalPoint.dx - centerOffset.dx,
+                        focalPoint.dy - centerOffset.dy,
+                        0,
+                      );
 
-              // Apply panning during zoom
-              setState(() {
-                _offset += delta;
+                      // Calculate distance from focal point to affect rotation speed
+                      final distance = focalPointVec.length;
+                      final rotationFactor = math.max(
+                        0.1,
+                        math.min(1.0, distance / 100),
+                      );
 
-                // Calculate zoom with sensitivity adjustment
-                final effectiveScaleDelta =
-                    1.0 + (scaleDelta - 1.0) * _config.zoomSensitivity;
-                final newZoom = _zoom * effectiveScaleDelta;
-                final zoomFactor = newZoom / _zoom;
-                _zoom = newZoom;
+                      // Calculate rotation angles based on drag distance
+                      // Use a smaller factor for more precise control
+                      final rotationX =
+                          delta.dy *
+                          0.005 *
+                          rotationFactor; // Up/down rotation around X
+                      final rotationY =
+                          -delta.dx *
+                          0.005 *
+                          rotationFactor; // Left/right rotation around Y
 
-                // Apply zoom centered around focal point
-                final centerOffset =
-                    Offset(size.width / 2, size.height / 2) + _offset;
-                final focalPointVec = vector.Vector3(
-                  focalPoint.dx - centerOffset.dx,
-                  focalPoint.dy - centerOffset.dy,
-                  0,
-                );
+                      // Create rotation matrices
+                      final rotateX = vector.Matrix4.rotationX(rotationX);
+                      final rotateY = vector.Matrix4.rotationY(rotationY);
 
-                final translateToFocal = vector.Matrix4.translation(
-                  -focalPointVec,
-                );
-                final scaleMatrix =
-                    vector.Matrix4.identity()..scale(zoomFactor);
-                final translateBack = vector.Matrix4.translation(focalPointVec);
+                      final translateToFocal = vector.Matrix4.translation(
+                        -focalPointVec,
+                      );
+                      final translateBack = vector.Matrix4.translation(
+                        focalPointVec,
+                      );
 
-                // Apply transformations
-                _transform =
-                    translateBack * scaleMatrix * translateToFocal * _transform;
+                      // Apply transformations with rotation factor
+                      // First rotate around Y (left/right) to maintain Z vertical
+                      // Then rotate around X (up/down)
+                      _transform =
+                          translateBack *
+                          rotateX *
+                          rotateY *
+                          translateToFocal *
+                          _transform;
+                      _invalidatePathCache();
+                    });
+                  } else {
+                    // Movement mode: pan and zoom
+                    if (scaleDelta == 1.0) {
+                      // Pan operation (one-finger drag)
+                      setState(() {
+                        // Apply panning with a slight dampening for smoother movement
+                        final panFactor = 0.8;
+                        _offset += delta * panFactor;
+                        _invalidatePathCache();
+                      });
+                    } else {
+                      // Zoom operation (pinch)
+                      setState(() {
+                        _offset += delta;
 
-                // Always invalidate path cache on zoom and pan together
-                _invalidatePathCache();
-              });
-            }
+                        // Adjust zoom sensitivity for more natural feel
+                        final effectiveScaleDelta =
+                            1.0 +
+                            (scaleDelta - 1.0) * _config.zoomSensitivity * 0.5;
+                        final newZoom = _zoom * effectiveScaleDelta;
+                        final zoomFactor = newZoom / _zoom;
+                        _zoom = newZoom;
 
-            _lastFocalPoint = focalPoint;
-          },
-          onScaleEnd: (details) {
-            _lastFocalPoint = null;
-          },
-          child: RepaintBoundary(
-            child: ClipRect(
-              child: CustomPaint(
-                size: size,
-                painter: _GcodePainter(
-                  transform: _transform,
-                  zoom: _zoom,
-                  offset: _offset + initialOffset,
-                  parsedGcode: _parsedGcode,
-                  pathPoints: _pathPoints,
-                  isTravelFlags: _isTravelFlags,
-                  zValues: _zValues,
-                  pathThickness: widget.pathThickness,
-                  cutColor: widget.cutColor,
-                  travelColor: widget.travelColor,
-                  gridColor: widget.gridColor,
-                  showGrid: widget.showGrid,
-                  isMillimeters: widget.isMillimeters,
-                  useLevelOfDetail: _config.useLevelOfDetail,
-                  usePathCaching: _config.usePathCaching,
-                  maxPointsToRender: _config.maxPointsToRender,
-                  pathCache: _pathCache,
-                  needsPathRebuild: _needsPathRebuild,
-                  onPathsBuilt: () {
-                    _needsPathRebuild = false;
-                  },
-                  preserveSmallFeatures: _config.preserveSmallFeatures,
-                  smallFeatureThreshold: _config.smallFeatureThreshold,
+                        final centerOffset =
+                            Offset(size.width / 2, size.height / 2) + _offset;
+                        final focalPointVec = vector.Vector3(
+                          focalPoint.dx - centerOffset.dx,
+                          focalPoint.dy - centerOffset.dy,
+                          0,
+                        );
+
+                        final translateToFocal = vector.Matrix4.translation(
+                          -focalPointVec,
+                        );
+                        final scaleMatrix =
+                            vector.Matrix4.identity()..scale(zoomFactor);
+                        final translateBack = vector.Matrix4.translation(
+                          focalPointVec,
+                        );
+
+                        _transform =
+                            translateBack *
+                            scaleMatrix *
+                            translateToFocal *
+                            _transform;
+                        _invalidatePathCache();
+                      });
+                    }
+                  }
+
+                  _lastFocalPoint = focalPoint;
+                },
+                onScaleEnd: (details) {
+                  _lastFocalPoint = null;
+                },
+                child: RepaintBoundary(
+                  child: ClipRect(
+                    child: CustomPaint(
+                      size: size,
+                      painter: _GcodePainter(
+                        transform: _transform,
+                        zoom: _zoom,
+                        offset: _offset + initialOffset,
+                        parsedGcode: _parsedGcode,
+                        pathPoints: _pathPoints,
+                        isTravelFlags: _isTravelFlags,
+                        zValues: _zValues,
+                        pathThickness: widget.pathThickness,
+                        cutColor: widget.cutColor,
+                        travelColor: widget.travelColor,
+                        gridColor: widget.gridColor,
+                        showGrid: widget.showGrid,
+                        isMillimeters: widget.isMillimeters,
+                        useLevelOfDetail: _config.useLevelOfDetail,
+                        usePathCaching: _config.usePathCaching,
+                        maxPointsToRender: _config.maxPointsToRender,
+                        pathCache: _pathCache,
+                        needsPathRebuild: _needsPathRebuild,
+                        onPathsBuilt: () {
+                          _needsPathRebuild = false;
+                        },
+                        preserveSmallFeatures: _config.preserveSmallFeatures,
+                        smallFeatureThreshold: _config.smallFeatureThreshold,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         );
       },
     );
