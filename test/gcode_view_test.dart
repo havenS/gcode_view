@@ -120,4 +120,69 @@ void main() {
       expect(controller, isNotNull);
     });
   });
+
+  group('GcodeViewerConfig Tests', () {
+    test('default configuration has expected values', () {
+      final config = const GcodeViewerConfig();
+
+      // Test default values
+      expect(config.useLevelOfDetail, true);
+      expect(config.usePathCaching, true);
+      expect(config.maxPointsToRender, 10000);
+      expect(config.preserveSmallFeatures, true);
+      expect(config.smallFeatureThreshold, 5.0);
+      expect(config.zoomSensitivity, 0.5);
+      expect(config.arcDetailLevel, 1.0);
+    });
+
+    test('custom configuration values are applied correctly', () {
+      final config = const GcodeViewerConfig(
+        useLevelOfDetail: false,
+        usePathCaching: false,
+        maxPointsToRender: 5000,
+        preserveSmallFeatures: false,
+        smallFeatureThreshold: 0.5,
+        zoomSensitivity: 2.0,
+        arcDetailLevel: 0.2,
+      );
+
+      // Test custom values
+      expect(config.useLevelOfDetail, false);
+      expect(config.usePathCaching, false);
+      expect(config.maxPointsToRender, 5000);
+      expect(config.preserveSmallFeatures, false);
+      expect(config.smallFeatureThreshold, 0.5);
+      expect(config.zoomSensitivity, 2.0);
+      expect(config.arcDetailLevel, 0.2);
+    });
+
+    testWidgets('GcodeViewer applies configuration correctly', (
+      WidgetTester tester,
+    ) async {
+      const customConfig = GcodeViewerConfig(
+        useLevelOfDetail: false,
+        usePathCaching: false,
+        maxPointsToRender: 5000,
+        preserveSmallFeatures: false,
+        smallFeatureThreshold: 0.5,
+        zoomSensitivity: 2.0,
+        arcDetailLevel: 0.2,
+      );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: GcodeViewer(
+              gcode: 'G1 X10 Y10',
+              isRotationMode: false,
+              config: customConfig,
+            ),
+          ),
+        ),
+      );
+
+      // Verify that the widget is rendered
+      expect(find.byType(GcodeViewer), findsOneWidget);
+    });
+  });
 }
