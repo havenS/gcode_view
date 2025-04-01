@@ -2,6 +2,11 @@
 
 A simple example application demonstrating how to use the `gcode_view` package.
 
+## Requirements
+
+- Flutter SDK
+- Android NDK version 27.0.12077973 or higher (required by file_picker plugin)
+
 ## Running the example
 
 Ensure you have Flutter installed, then:

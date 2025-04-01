@@ -1,16 +1,3 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
-
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
-
 # G-code Viewer
 
 [![pub package](https://img.shields.io/pub/v/gcode_view.svg)](https://pub.dev/packages/gcode_view)
@@ -28,6 +15,25 @@ A Flutter widget for visualizing G-code paths in 3D with interactive controls.
 - Supports millimeters and inches
 - Two interaction modes: move (pan/zoom) and rotate
 - Configurable performance settings
+
+## Requirements
+
+- Flutter SDK
+- Android NDK version 27.0.12077973 or higher (required by file_picker plugin)
+
+## Screenshots
+
+### iOS
+![iOS Screenshot](screenshots/iPhone.png)
+
+### iPad
+![iPad Screenshot](screenshots/iPad.png)
+
+### Android
+![Android Screenshot](screenshots/android.png)
+
+### macOS
+![macOS Screenshot](screenshots/macos.png)
 
 ## Installation
 
