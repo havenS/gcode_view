@@ -1,3 +1,7 @@
+/// Configuration options for the G-code viewer that control rendering behavior and performance.
+///
+/// This class provides various settings to customize how the G-code is rendered,
+/// including performance optimizations, detail levels, and feature preservation.
 class GcodeViewerConfig {
   /// Controls the sensitivity of zooming gestures
   final double zoomSensitivity;
@@ -20,7 +24,10 @@ class GcodeViewerConfig {
   /// Threshold in mm below which features are considered "small" and preserved
   final double smallFeatureThreshold;
 
-  /// Create a viewer configuration
+  /// Creates a new [GcodeViewerConfig] with default settings optimized for general use.
+  ///
+  /// The default values are chosen to provide a good balance between performance
+  /// and visual quality for most G-code files.
   const GcodeViewerConfig({
     this.zoomSensitivity = 0.5,
     this.usePathCaching = true,
