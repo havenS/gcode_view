@@ -24,16 +24,16 @@ A Flutter widget for visualizing G-code paths in 3D with interactive controls.
 ## Screenshots
 
 ### iOS
-![iOS Screenshot](screenshots/iPhone.png)
+![iOS Screenshot](https://raw.githubusercontent.com/havenS/gcode_view/main/screenshots/iPhone.png)
 
 ### iPad
-![iPad Screenshot](screenshots/iPad.png)
+![iPad Screenshot](https://raw.githubusercontent.com/havenS/gcode_view/main/screenshots/iPad.png)
 
 ### Android
-![Android Screenshot](screenshots/android.png)
+![Android Screenshot](https://raw.githubusercontent.com/havenS/gcode_view/main/screenshots/android.png)
 
 ### macOS
-![macOS Screenshot](screenshots/macos.png)
+![macOS Screenshot](https://raw.githubusercontent.com/havenS/gcode_view/main/screenshots/macos.png)
 
 ## Installation
 
