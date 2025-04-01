@@ -1,9 +1,9 @@
 name: gcode_view
 description: "A Flutter widget to visualize G-code paths in 3D with interactive camera controls."
 version: 0.0.1
-homepage: https://github.com/yourusername/gcode_view
-repository: https://github.com/yourusername/gcode_view
-issue_tracker: https://github.com/yourusername/gcode_view/issues
+homepage: https://github.com/havenS/gcode_view
+repository: https://github.com/havenS/gcode_view
+issue_tracker: https://github.com/havenS/gcode_view/issues
 
 environment:
   sdk: ^3.7.0
