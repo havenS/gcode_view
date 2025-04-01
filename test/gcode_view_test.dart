@@ -10,7 +10,9 @@ void main() {
     testWidgets('renders without crashing', (WidgetTester tester) async {
       // Build our widget
       await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: GcodeViewer(gcode: ''))),
+        const MaterialApp(
+          home: Scaffold(body: GcodeViewer(gcode: '', isRotationMode: false)),
+        ),
       );
 
       // Verify it renders without errors
@@ -20,10 +22,50 @@ void main() {
     testWidgets('handles empty gcode string', (WidgetTester tester) async {
       // Build our widget with empty G-code
       await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: GcodeViewer(gcode: ''))),
+        const MaterialApp(
+          home: Scaffold(body: GcodeViewer(gcode: '', isRotationMode: false)),
+        ),
       );
 
       // Verify it renders without errors
+      expect(find.byType(GcodeViewer), findsOneWidget);
+    });
+
+    testWidgets('GcodeViewer shows empty state when no G-code is provided', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: GcodeViewer(gcode: '', isRotationMode: false)),
+        ),
+      );
+
+      // Verify that the G-code viewer is rendered
+      expect(find.byType(GcodeViewer), findsOneWidget);
+
+      // Verify that the widget is in empty state by checking for CustomPaint
+      // which should still be rendered but with no paths
+      final customPaint = find.descendant(
+        of: find.byType(GcodeViewer),
+        matching: find.byType(CustomPaint),
+      );
+      expect(customPaint, findsOneWidget);
+    });
+
+    testWidgets('GcodeViewer shows G-code content when provided', (
+      WidgetTester tester,
+    ) async {
+      const testGcode = 'G21\nG90\nG0 X0 Y0\nG1 X10 Y10 F100\nM2';
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: GcodeViewer(gcode: testGcode, isRotationMode: false),
+          ),
+        ),
+      );
+
+      // Verify that the G-code viewer is rendered
       expect(find.byType(GcodeViewer), findsOneWidget);
     });
   });
@@ -48,8 +90,14 @@ void main() {
 
     test('parseGcode handles travel move', () {
       final result = parseGcode('G0 X10 Y20 Z30');
-      expect(result.points.length, 1);
-      expect(result.isTravel, [true]); // G0 is a travel move
+      expect(result.points.length, 2); // Initial point + G0 move
+      expect(result.points.first.x, 0);
+      expect(result.points.first.y, 0);
+      expect(result.points.first.z, 0);
+      expect(result.points.last.x, 10);
+      expect(result.points.last.y, 20);
+      expect(result.points.last.z, 30);
+      expect(result.isTravel, [true, true]); // Both points are travel moves
     });
 
     test('getNormalizedZLevels works correctly', () {

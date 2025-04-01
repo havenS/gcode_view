@@ -36,6 +36,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool isLoading = true;
   String currentFilePath = "";
   bool showGrid = true;
+  bool _isRotationMode = false;
 
   // Vibrant colors for visibility
   final Color cutColor = Colors.blue;
@@ -143,23 +144,6 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Column(
         children: [
-          // Info bar with gesture instructions
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-            color: Colors.grey.shade100,
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.pan_tool_alt, size: 16),
-                SizedBox(width: 4),
-                Text('Drag to pan', style: TextStyle(fontSize: 12)),
-                SizedBox(width: 16),
-                Icon(Icons.pinch, size: 16),
-                SizedBox(width: 4),
-                Text('Pinch to zoom', style: TextStyle(fontSize: 12)),
-              ],
-            ),
-          ),
           Expanded(
             child: isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -190,14 +174,47 @@ class _MyHomePageState extends State<MyHomePage> {
                         showGrid: showGrid,
                         controller: controller,
                         config: viewerConfig,
+                        isRotationMode: _isRotationMode,
                       ),
           ),
+          // Info bar with gesture instructions
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+            color: Colors.grey.shade100,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: _isRotationMode
+                  ? [
+                      const Icon(Icons.swipe_left, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('Drag left/right to rotate',
+                          style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 16),
+                      const Icon(Icons.swipe_up, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('Drag up/down to tilt',
+                          style: TextStyle(fontSize: 12)),
+                    ]
+                  : [
+                      const Icon(Icons.pan_tool, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('Drag to pan', style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 16),
+                      const Icon(Icons.pinch, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('Pinch to zoom',
+                          style: TextStyle(fontSize: 12)),
+                    ],
+            ),
+          ),
+          // Combined mode selector and color legend
           Container(
             padding: const EdgeInsets.all(16),
             color: Colors.grey.shade200,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                // Color legend
                 Row(
                   children: [
                     Container(
@@ -210,11 +227,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       'G0 - Rapid movements (RED)',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
+                    const SizedBox(width: 16),
                     Container(
                       width: 20,
                       height: 20,
@@ -225,6 +238,21 @@ class _MyHomePageState extends State<MyHomePage> {
                       'G1 - Working movements (BLUE)',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
+                  ],
+                ),
+                // Mode selector
+                Row(
+                  children: [
+                    const Text('Move Mode'),
+                    Switch(
+                      value: _isRotationMode,
+                      onChanged: (value) {
+                        setState(() {
+                          _isRotationMode = value;
+                        });
+                      },
+                    ),
+                    const Text('Rotate Mode'),
                   ],
                 ),
               ],
